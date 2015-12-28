@@ -3,15 +3,22 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/base64"
+	"fmt"
+	"html/template"
 	"io"
 	"io/ioutil"
 	"log"
+	"net/mail"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -19,16 +26,171 @@ import (
 )
 
 type AbridgedAbridgedSummaryClient struct {
-	svc *gmail.UsersService
+	svc    *gmail.UsersService
+	Groups []Group
+}
+
+type Group struct {
+	Name             string
+	ThreadListingURL string
+	Threads          []Thread
+}
+
+type Thread struct {
+	Subject string
+	URL     string
+	Updates []Update
+}
+
+type Update struct {
+	RawTRInnerHTML template.HTML
+}
+
+var (
+	groupNameFromURL = regexp.MustCompile(`^.*#!forum/(.*)/topics$`)
+)
+
+func GroupFromEmail(email []byte) (Group, error) {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(email))
+	if err != nil {
+		return Group{}, err
+	}
+	firstLink := doc.Find("a")
+	href, _ := firstLink.Attr("href")
+	href = strings.TrimSpace(href)
+	groupNameResult := groupNameFromURL.FindAllStringSubmatch(href, -1)
+	group := Group{
+		Name:             groupNameResult[0][1],
+		ThreadListingURL: href,
+	}
+
+	// parse threads
+	doc.Find("a").Each(func(_ int, threadAnchor *goquery.Selection) {
+		nameAttr, _ := threadAnchor.Attr("name")
+		if strings.Index(nameAttr, "group_thread") != 0 {
+			return
+		}
+		var thread Thread
+		thread.Subject = strings.TrimSpace(threadAnchor.Next().Text())
+		thread.URL, _ = threadAnchor.Next().Find("a").Attr("href")
+		// parse updates
+		threadAnchor.Next().Next().Find("tr").Each(func(j int, updateTr *goquery.Selection) {
+			html, err := updateTr.Html()
+			if err != nil {
+				panic(err)
+			}
+			thread.Updates = append(thread.Updates, Update{template.HTML(html)})
+		})
+		group.Threads = MergeThread(group.Threads, thread)
+	})
+
+	return group, nil
+}
+
+func MergeGroup(into []Group, group Group) []Group {
+	foundit := -1
+	for i, g := range into {
+		if g.Name == group.Name {
+			foundit = i
+			break
+		}
+	}
+	if foundit == -1 {
+		return append(into, group)
+	}
+	for _, thread := range group.Threads {
+		into[foundit].Threads = MergeThread(into[foundit].Threads, thread)
+	}
+	return into
+}
+
+func MergeThread(into []Thread, thread Thread) []Thread {
+	foundit := -1
+	for i, t := range into {
+		if t.URL == thread.URL {
+			foundit = i
+			break
+		}
+	}
+	if foundit == -1 {
+		return append(into, thread)
+	}
+
+	// assume thread.Updates is in chrono order, but that all thread.Updates came before existing
+	// TODO: add timestamp to Update so that this isn't so fragile
+	into[foundit].Updates = append(thread.Updates, into[foundit].Updates...)
+	return into
 }
 
 func (c *AbridgedAbridgedSummaryClient) CombineAndArchiveThread(t *gmail.Thread) error {
-	// todo: copy contents into structure
+	message := t.Messages[0]
+	for _, part := range message.Payload.Parts {
+		if part.MimeType == "text/html" {
+			data, err := base64.URLEncoding.DecodeString(part.Body.Data)
+			if err != nil {
+				return err
+			}
+			//log.Print(string(data))
+			group, err := GroupFromEmail(data)
+			if err != nil {
+				return err
+			}
+			c.Groups = MergeGroup(c.Groups, group)
+		}
+	}
 
-	//_, err := c.svc.Threads.Modify("me", t.Id, &gmail.ModifyThreadRequest{
-	//	RemoveLabelIds: []string{"INBOX"},
-	//}).Do()
-	//return err
+	_, err := c.svc.Threads.Modify("me", t.Id, &gmail.ModifyThreadRequest{
+		RemoveLabelIds: []string{"INBOX"},
+	}).Do()
+	return err
+}
+
+func (c *AbridgedAbridgedSummaryClient) SendSummary() error {
+	// render the email
+	slurp, err := ioutil.ReadFile("combined.tmpl")
+	if err != nil {
+		return err
+	}
+	t := template.Must(template.New("").Parse(string(slurp)))
+
+	var buf bytes.Buffer
+	//test, _ := os.Create("test.html")
+	//defer test.Close()
+	if err := t.Execute(&buf, map[string]interface{}{"Groups": c.Groups}); err != nil {
+		return err
+	}
+
+	// get profile so we can correctly set from/to
+	profile, err := c.svc.GetProfile("me").Do()
+	if err != nil {
+		return err
+	}
+	from := mail.Address{"", profile.EmailAddress}
+	to := mail.Address{"", profile.EmailAddress}
+	header := make(map[string]string)
+	header["From"] = from.String()
+	header["To"] = to.String()
+	header["Subject"] = "Abridged Abridged Summary"
+	header["MIME-Version"] = "1.0"
+	header["Content-Type"] = "text/html; charset=\"utf-8\""
+	header["Content-Transfer-Encoding"] = "base64"
+
+	var msg string
+	for k, v := range header {
+		msg += fmt.Sprintf("%s: %s\r\n", k, v)
+	}
+	msg += "\r\n" + buf.String()
+
+	gmsg := gmail.Message{
+		Raw: base64.URLEncoding.EncodeToString([]byte(msg)),
+	}
+
+	_, err = c.svc.Messages.Send("me", &gmsg).Do()
+	if err != nil {
+		log.Fatalf("em %v, err %v", gmsg, err)
+		return err
+	}
+
 	return nil
 }
 
@@ -146,6 +308,9 @@ func main() {
 		log.Printf("combining and archiving...")
 		return aasc.CombineAndArchiveThread(t)
 	}); err != nil {
+		log.Fatal(err)
+	}
+	if err := aasc.SendSummary(); err != nil {
 		log.Fatal(err)
 	}
 }
