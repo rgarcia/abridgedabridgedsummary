@@ -1,0 +1,50 @@
+{
+	"ImportPath": "github.com/rgarcia/abridgedabridgedsummary",
+	"GoVersion": "go1.5.2",
+	"Packages": [
+		"github.com/rgarcia/abridgedabridgedsummary"
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/PuerkitoBio/goquery",
+			"Comment": "v0.3.2-80-g417cce8",
+			"Rev": "417cce822c7b9a379df5824be95228d177c5698b"
+		},
+		{
+			"ImportPath": "github.com/andybalholm/cascadia",
+			"Rev": "3ad29d1ad1c4f2023e355603324348cf1f4b2d48"
+		},
+		{
+			"ImportPath": "golang.org/x/net/context",
+			"Rev": "03affa02f16950ea3188823456766ed60bfed9bb"
+		},
+		{
+			"ImportPath": "golang.org/x/net/html",
+			"Rev": "03affa02f16950ea3188823456766ed60bfed9bb"
+		},
+		{
+			"ImportPath": "golang.org/x/oauth2",
+			"Rev": "c30abeebd1a0c41f6e0d9ad6d26fd9daf8aff7d6"
+		},
+		{
+			"ImportPath": "google.golang.org/api/gensupport",
+			"Rev": "dc6d2353af16e2a2b0ff6986af051d473a4ed468"
+		},
+		{
+			"ImportPath": "google.golang.org/api/gmail/v1",
+			"Rev": "dc6d2353af16e2a2b0ff6986af051d473a4ed468"
+		},
+		{
+			"ImportPath": "google.golang.org/api/googleapi",
+			"Rev": "dc6d2353af16e2a2b0ff6986af051d473a4ed468"
+		},
+		{
+			"ImportPath": "google.golang.org/cloud/compute/metadata",
+			"Rev": "c7e49e47d60cc26958b9d52bc612d384ba8045f1"
+		},
+		{
+			"ImportPath": "google.golang.org/cloud/internal",
+			"Rev": "c7e49e47d60cc26958b9d52bc612d384ba8045f1"
+		}
+	]
+}
